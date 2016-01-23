@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+
+# Behavior constants 
+# try to load from env, if we fail, we build a packages.nix
+PACKAGES_FILE=${NIXIE_PACKAGES_FILE:-$HOME/.nixpkgs/packages.nix}
+
+# Color constants
+black='\E[30m'
+red='\E[31m'
+green='\E[32m'
+yellow='\E[33m'
+blue='\E[34m'
+magenta='\E[35m'
+cyan='\E[36m'
+white='\E[37m'
+
+## Get the action to perform
+if [ $# -lt 1 ]; then
+    action="";
+else
+    action=$1;
+fi
+
+####################
+# helper functions #
+####################
+
+#bind program name variable for helptext
+progname=`basename $0`;
+
+function minimal_helptext() {
+    case $1 in
+        install)
+            echo "    install <pkgname?> :"
+            echo "        installs a package to $PACKAGES_FILE,";
+            echo "        and rebuilds the user env";
+            ;;
+        remove)
+            echo "    remove <pkgname> :";
+            echo "        removes a package from $PACKAGES_FILE,";
+            echo "        and rebuilds the user env";
+            ;;
+        list)
+            echo "    list :"
+            echo "         lists the nixie-managed packages in the user"
+            echo "        packages file"
+            ;;
+        help)
+            echo "    help :"
+            echo "        print this help text"
+            ;;
+        *)
+            ;;
+    esac 
+    echo ""
+}
+
+function help_nixie_packages_verbose () {
+    echo "The nixie packages file defaults to ~/.nixpkgs/packages.nix"
+    echo "but can be overridden by setting NIXIE_PACKAGES_FILE environment"
+    echo ""
+    echo "If the build fails, you can"
+}
+
+function helptext() {
+    echo "Helptext for '$1':";
+
+    if [ "$1" == "" ]; then
+        minimal_helptext "remove"
+        minimal_helptext "list"
+        minimal_helptext "help"
+    else
+        minimal_helptext $1;
+        case $1 in
+            install)
+                echo "    installs a package by inserting it at the end of the"
+                echo "    fenced section of a nixie packages file."
+                echo "    "
+                echo "    If the specified package is not found between the fences,"
+                echo "    It prints an error message and exits with an error"
+                echo "    "
+                echo "    see '$progname help packagefile' for an explanation of a"
+                echo "    nixie packages file, and '$progname help debugging' for"
+                echo "    information on fixing a broken nixie packages file"
+                ;;
+            remove)
+                echo "    removes a package by deleting it from the "
+                echo "    fenced section of a nixie packages file."
+                echo "    "
+                echo "    If the specified package is not found between the fences,"
+                echo "    It prints an error message and exits with an error" 
+                echo "    "
+                echo "    see '$progname help packagefile' for an explanation of a"
+                echo "    nixie packages file, and '$progname help debugging' for"
+                echo "    information on fixing a broken nixie packages file"
+                ;;
+            list)
+                echo "    lists the files in between the fences of a nixie packages file"
+                ;;
+            packagefile)
+                echo "    The nixie packages file works by inserting package names between"
+                echo "    two strings, BEGIN_NIXIE_MANAGED and END_NIXIE_MANAGED."
+                echo "    these comments are ignored if preceded with a backslash"
+                echo "    (e.g. \\BEGIN_NIXIE_MANAGED)"
+                echo "    "
+                echo "    after modifying the package file, $progname will update "
+                echo "    the user's environment by calling '$progname -f $PACKAGE_FILE' -i'"
+                echo "    on failure, it reverts the changes made to the packages file in order"
+                echo "    to keep the packages file in sync with the state of the user environment"
+                echo "    "
+                ;;
+            debugging)
+                echo "    This section of the helptext will be filled out as issues arise during usage"
+                echo "    but when $PACKAGE_FILE gets into an unstable state, generally you can fix it"
+                echo "    by maually opening it up and removing wahtever offending lines are reported"
+                echo "    by nix-env."
+                echo "    "
+                echo "    note that $progname is written assuming a single set of fence comments so"
+                echo "    if you have more than one, unpredicatable behavior will occur"
+                echo "    (see $progname help packagefile for info on fence comments)"
+                ;;
+            help)
+                ;;
+            *)
+               echo "    no helptext for '$1'" 
+                ;;
+        esac 
+        echo ""
+    fi
+}
+
+
+function cecho () {
+# Argument $1 = message
+# Argument $2 = color
+    message=$1
+    color=${2:-$white}           # Defaults to black, if not specified.
+
+    echo -en "$color"
+    echo "$message"
+    tput sgr0
+
+    return
+}  
+
+function nixie_check_package() {
+    # $1 : nixie package file
+    # $2 : term to chec if it exists
+    # returns 1 if the packagename is not found in the nixie
+    # package file, otherwise returns 0
+
+    nixie_list_packages $1 nixie_corpus
+    echo "$nixie_corpus" | grep -q $2
+    if [ 0 -ne $? ]; then
+        return 1
+    fi
+    return 0
+}
+
+function nixie_reinstall_packages() {
+    nix-env -f $PACKAGES_FILE -i
+}
+
+
+##################
+# nixie commands #
+##################
+
+function nixie_list_packages() {
+    # $1 : file to list package names in
+    # $2 : variable to mutate to the list of packages
+    temp=`sed "0,/[^\]BEGIN_NIXIE_MANAGED/ d; {/[^\]END_NIXIE_MANAGED/,100 d}; s/^[ \t]*//; s/^[ \t]&$//;" $1`
+    eval "$2=\"$temp\""
+}
+
+function nixie_remove_package() {
+    # $1 : file to remove a package name from
+    # $2 : packagename to be removed
+
+    # exit with error if it is not in the package file
+    nixie_check_package $1 $2
+    if [ 0 -ne $? ]; then
+        cecho "package $2 not managed by nixie"
+              "check that it is installed?", $yellow
+        exit 2;
+    fi
+
+    echo "$existing"
+    existing=`sed "/[^\\]BEGIN_NIXIE_MANAGED/,/[^\\]END_NIXIE_MANAGED/ {/^\\w*(?!$2)/d}" $1`
+    
+    sed -i "/[^\\]BEGIN_NIXIE_MANAGED/,/[^\\]END_NIXIE_MANAGED/ {/$2/d}" $1
+}
+
+function nixie_insert_package() {
+    # $1 : file to insert a package name into
+    # $2 : packagename to be inserted
+    
+    # exit wit herro if the package is already in the package file
+    nixie_check_package $1 $2
+    if [ 0 -eq $? ]; then
+        cecho "package $2 is already in the nixie packages file", $yellow
+        exit 2;
+    fi
+
+    modified_file=`sed "/[^\\]END_NIXIE_MANAGED/i \ \ \ \ $2" $1`
+    echo "$modified_file" > $1
+}
+
+#######################
+# root level behavior #
+#######################
+
+#installing packages
+if [ "$action" = "install" ] || [ "$action" = "i" ] ||
+    [ "$action" = "add" ] || [ "$action" = "a" ]; then
+    if [ $# -ne 2 ]; then  helptext $action; exit 1; fi
+    echo "adding package '$2' to $PACKAGES_FILE";
+    # load packages file into memory to revert the edit
+    # if something goes wrong
+    package_cache=`cat $PACKAGES_FILE`
+
+    # insert a package into the packages file and install
+    nixie_insert_package $PACKAGES_FILE $2
+
+    echo "reinstalling packages.."
+    nixie_reinstall_packages
+
+    if [ 0 -ne $? ]; then
+        cecho "failed to install packages, reverting edit" $red
+        echo "$package_cache" > $PACKAGES_FILE
+        exit 1
+    else 
+        cecho "installed package '$2' successfully" $green
+        exit 0
+    fi 
+
+# removing packages
+else if [ "$action" = "remove" ] || [ "$action" = "r" ] ||
+        [ "$action" = "delete" ] || [ "$action" = "d" ] ; then
+    if [ $# -ne 2 ]; then  helptext $action; exit 1; fi
+    echo "${action:0:5}ing package $2 from $PACKAGES_FILE"
+    
+    package_cache=`cat $PACKAGES_FILE`
+    nixie_remove_package $PACKAGES_FILE $2
+
+    echo "reinstalling packages.."
+    nixie_reinstall_packages
+
+    if [ 0 -ne $? ]; then
+        cecho "failed to remove packages, reverting edit" $red
+        echo "$package_cache" > $PACKAGES_FILE
+        exit 1
+    else 
+        cecho "removed package '$2' successfully" $green
+        exit 0
+    fi 
+
+# listing packages
+else if [ "$action" = "list" ] || [ "$action" = "l" ] ; then
+    nixie_list_packages $PACKAGES_FILE package_list
+    echo "$package_list"
+
+# if not recognized or 'help', print helptext
+else
+    if [ "$action" == "" ] || [ "$action" != "help" ]; then
+        echo "unknown action $action"
+    fi
+
+    helptext $2
+
+fi fi fi
+
+
+
