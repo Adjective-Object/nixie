@@ -157,8 +157,13 @@ function nixie_check_package() {
     return 0
 }
 
-function nixie_reinstall_packages() {
+function nix_reinstall_packages() {
     nix-env -f $PACKAGES_FILE -i
+}
+
+function nix_remove_package() {
+    # $1: name of package to remove
+    nix-env -e $1
 }
 
 
@@ -184,10 +189,8 @@ function nixie_remove_package() {
               "check that it is installed?", $yellow
         exit 2;
     fi
-
-    echo "$existing"
-    existing=`sed "/[^\\]BEGIN_NIXIE_MANAGED/,/[^\\]END_NIXIE_MANAGED/ {/^\\w*(?!$2)/d}" $1`
     
+    # delete lines with the package's name in them
     sed -i "/[^\\]BEGIN_NIXIE_MANAGED/,/[^\\]END_NIXIE_MANAGED/ {/$2/d}" $1
 }
 
@@ -223,7 +226,7 @@ if [ "$action" = "install" ] || [ "$action" = "i" ] ||
     nixie_insert_package $PACKAGES_FILE $2
 
     echo "reinstalling packages.."
-    nixie_reinstall_packages
+    nix_reinstall_packages
 
     if [ 0 -ne $? ]; then
         cecho "failed to install packages, reverting edit" $red
@@ -244,7 +247,8 @@ else if [ "$action" = "remove" ] || [ "$action" = "r" ] ||
     nixie_remove_package $PACKAGES_FILE $2
 
     echo "reinstalling packages.."
-    nixie_reinstall_packages
+    nix_remove_package $2
+    nix_reinstall_packages
 
     if [ 0 -ne $? ]; then
         cecho "failed to remove packages, reverting edit" $red
